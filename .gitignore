@@ -1,0 +1,8 @@
+node_modules
+# Keep environment variables out of version control.
+# Ignore every .env variant, then re-allow the committed template.
+.env
+.env.*
+!.env.example
+
+/src/generated/prisma
