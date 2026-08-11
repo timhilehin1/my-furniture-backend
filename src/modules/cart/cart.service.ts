@@ -38,6 +38,8 @@ export async function addToCart(data: CartInput, userId: string) {
       userId,
       productId,
       quantity: data.quantity ?? 1,
+      productName: product.productName,
+      imageUrl: product.productImages[0]?.url ?? null,
     },
   });
 }

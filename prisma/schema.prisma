@@ -24,6 +24,9 @@ enum OrderStatus {
   SHIPPED
   DELIVERED
   CANCELLED
+  EXPIRED
+  FAILED
+  REFUNDED
 }
 
 model User {
@@ -36,7 +39,7 @@ model User {
   state     String?
   country   String?
   createdAt DateTime @default(now())
-updatedAt DateTime @default(now()) @updatedAt
+updatedAt DateTime  @updatedAt
   role      Role     @default(CUSTOMER)
   orders    Order[]
   carts     Cart[]
@@ -46,8 +49,10 @@ model Cart {
   id        String   @id @default(cuid())
   userId    String
   createdAt DateTime @default(now())
-updatedAt DateTime @default(now()) @updatedAt
+updatedAt DateTime @updatedAt
   productId String
+  productName String?
+  imageUrl String?
   quantity  Int      @default(1)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@unique([userId, productId])
@@ -61,6 +66,15 @@ model Order {
   subtotal   Int
   total      Int
   orderItems OrderItem[]
+
+  // Snapshot of delivery details at the time the order was placed.
+  // Deliberately copied, not related, so later profile edits don't rewrite history.
+  shippingAddress String
+  shippingCity    String
+  shippingState   String
+  shippingCountry String
+  phone           String
+  email           String
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

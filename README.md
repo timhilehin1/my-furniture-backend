@@ -186,17 +186,22 @@ losing the thread._
 - Profile endpoint
 - Cart: add / read / update / delete one / delete all, with Sanity product merge and subtotal
 - Checkout: cart snapshotted into `Order` + `OrderItem` with frozen prices
+- **M1 order hardening.** `buildCart` partitions available from unavailable items instead of failing
+  the whole cart; per-item `availabilityStatus`; empty-cart and unavailable-item guards on checkout;
+  delivery snapshot (address, phone, email) required and frozen on `Order`; body validation on
+  `POST /checkout`; one-pending-order-per-user enforced by a partial unique index; `EXPIRED`,
+  `FAILED` and `REFUNDED` statuses added
 
 **In progress**
-- Nothing yet — next session starts M1 below
+- Nothing — M1 is closed, next session starts M2
 
 **Next (see Timeline)**
-- M1 order hardening → M2 inventory + payment init → M3 webhook → M4 read endpoints + deploy
+- M2 inventory + payment init → M3 webhook → M4 read endpoints + deploy
 
 **Parked (v2 — deliberately not doing these now)**
 - Frontend wiring · reconciliation job · order expiry · confirmation emails · cancellation and
   refunds · admin status transitions · live Sanity→Postgres inventory sync · stock reservations ·
-  automated tests · rate limiting · version control
+  automated tests · rate limiting
 
 ---
 
@@ -220,19 +225,56 @@ Named on purpose. An unnamed gap is a bug; a named one is a decision.
 **Open issues in the current code**
 - `loginUser` returns the **access token as the refresh token** — refresh isn't implemented, it just
   looks like it is (`src/modules/auth/auth.service.ts`).
-- `POST /checkout` with an empty cart creates a ₦0 order with no items (`src/lib/util.ts` returns an
-  empty cart and checkout proceeds anyway). *Fix in M1.*
-- `buildCart` throws a 404 for the **entire cart** if any one product is missing from Sanity, leaving
-  the customer stuck with no way to remove it. *Fix in M1.*
-- `availabilityStatus` is fetched from Sanity and never checked. *Fix in M1.*
-- Orders carry no shipping address, phone or email — unfulfillable as-is. *Fix in M1.*
-- `src/lib/prisma.ts` logs `DATABASE_URL`, password included, to stdout on every boot. Remove before
-  deploying.
+- **Sanity doesn't enforce that a discounted product has a discount price.** A product can be saved
+  with `discountStatus: true` and no `discountPrice`. `buildCart` warns and falls back to
+  `productPrice`, so the storefront shows a sale badge and the customer is charged full price. Add a
+  required-when rule to the Sanity product schema — and keep the backend guard regardless, since the
+  rule only validates documents on save and won't touch the ones that already exist.
 - `src/server.ts` hardcodes port 4000. Hosts inject a `PORT` env var — this must read it before M4.
 - `server.ts` imports `dotenv/config` but `dotenv` isn't in `package.json` dependencies; it currently
   resolves transitively, which will break on a clean install.
-- `User.updatedAt` has both `@default(now())` and `@updatedAt`, which is redundant.
-- **No version control.** There is no git repo, so there is no undo. Parked by choice.
+
+**Resolved**
+- `buildCart` no longer 404s the entire cart over one missing product. It partitions into
+  `items` + `unavailableItems`, each unavailable entry tagged with a `reason`
+  (`"DELETED"` / `"OUT_OF_STOCK"`), so the caller decides policy rather than the helper.
+- `availabilityStatus` is now checked per item in `buildCart` and routed to `OUT_OF_STOCK`.
+- An empty cart returns `{ items: [], subTotal: 0, unavailableItems: [] }` instead of throwing 404 —
+  a new user viewing an empty cart is not an error.
+- `POST /checkout` now refuses a cart containing unavailable items with a 409 rather than silently
+  creating an order for a subset of it, and an empty cart returns `BadRequestError` rather than 404.
+  The unavailable check runs **before** the empty check, so a cart whose products have all been
+  deleted reports "review your cart" rather than the misleading "cart is empty".
+- `POST /checkout` validates its body. `checkoutSchema` is attached to the route as `schema.body`,
+  so the `as CheckoutInput` cast in the controller is now backed by a real runtime check rather
+  than being a promise nothing keeps.
+- Orders carry a delivery snapshot. `shippingAddress`, `shippingCity`, `shippingState`,
+  `shippingCountry`, `phone` and `email` are required columns on `Order`, supplied in the checkout
+  request body and frozen at creation — deliberately copied rather than related to the profile, so a
+  later address change can't rewrite where a past order was sent.
+- Cart rows snapshot the product's name and image at add-to-cart time (`Cart.productName`,
+  `Cart.imageUrl`, written by `addToCart`), mirroring what `OrderItem` already does. Display fields
+  only — price is never snapshotted here, so a stale row can mislabel an item but can never
+  mischarge one.
+- A user can hold only one `PENDING` order at a time. Enforced by a hand-written partial unique
+  index (`prisma/migrations/…_one_pending_order_per_user`) — `CREATE UNIQUE INDEX … ON "Order"
+  ("userId") WHERE status = 'PENDING'` — because Prisma's schema language can't express a filtered
+  index, and an application-level check alone loses to a concurrent request. Read the SQL of future
+  generated migrations: Prisma can't see this index in `schema.prisma` and may try to drop it.
+- The losing side of a concurrent checkout gets a 409, not a 500. `checkout` catches Prisma's
+  `P2002` around `order.create` and throws the same `ConflictError` its `findFirst` check does, so
+  the message is identical however the duplicate was caught. Note that this Prisma version (7.8 with
+  the `PrismaPg` adapter) reports **no `meta.target`** — the constraint name lives only in an
+  untyped, adapter-specific nested field — so the check narrows on `meta.modelName === "Order"`,
+  which is unambiguous only while `Order` has exactly one unique constraint.
+- `error-handler.ts` maps any unhandled `P2002` to a generic 409 rather than letting it fall through
+  to a 500. A duplicate is a client conflict, not a server failure. Prisma's raw message names
+  tables and columns, so it's logged and not returned.
+- `OrderStatus` gained `EXPIRED`, `FAILED` and `REFUNDED`.
+- `src/lib/prisma.ts` no longer logs `DATABASE_URL` to stdout.
+- Redundant `@default(now())` removed from `updatedAt` on `User` and `Cart`; all four models now
+  read the same.
+- **Version control exists.** The project is now a git repo — there is an undo.
 
 ---
 
@@ -243,7 +285,7 @@ is the whole scope.
 
 | | Week | Milestone | Done when |
 |---|---|---|---|
-| **M1** | Aug 10–16 | **Docs + order hardening.** Docs in one ~2hr sitting, then: empty-cart guard, address/contact snapshot on orders, per-item availability in `buildCart`, duplicate-checkout protection, new statuses | Checkout can't produce a ₦0, nonsense, or unshippable order |
+| **M1** ✅ | Aug 10–16 | **Docs + order hardening.** Docs in one ~2hr sitting, then: empty-cart guard, address/contact snapshot on orders, per-item availability in `buildCart`, duplicate-checkout protection, new statuses | ✅ Done 11 Aug. Checkout can't produce a ₦0, nonsense, unshippable or duplicated order |
 | **M2** | Aug 17–23 | **Inventory + payment init.** Stock quantity in Postgres seeded by a one-off script, out-of-stock rejection at checkout, `Payment` model, `POST /payments/init` | The returned URL opens a real Paystack page for the right amount in kobo |
 | **M3** | Aug 24–30 | **The webhook.** Raw-body route, HMAC verification, amount + currency check, idempotent handler, and the one transaction (status + stock + cart clear). Budget the whole week | A test card drives `PENDING → PAID`, stock drops exactly once, cart empties |
 | **M4** | Aug 31–Sep 6 | **Read endpoints + deploy.** Paginated order history, owner-scoped order detail, hosted Postgres, deploy, live webhook URL, tests re-run against production | A real Paystack test payment succeeds against the live URL |

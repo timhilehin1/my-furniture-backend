@@ -86,3 +86,24 @@ to v2 to make it fit. Naming the cuts felt better than pretending I'd do everyth
 ---
 
 <!-- Next entry goes here. Date it, keep it short, write it even when the session went badly. -->
+So today the 9th of Auguat 2026, I was able to sort the the iasue of me working on my personal project from my princeps account. This ia a step in polishing up my github.
+I found the ssh key decides which account is allowed to push. user.email decides whose contribution graph the commit lands on. i had the keys right and the email wrong, so pushes went to my personal repos but the commits were credited to work.
+what i know going forward
+1. pull work stuff into dev.work
+2. pull personal into dev/personal
+
+use ssh to clone.  - git clone git@github.com-work:Princeps-Finance/some-repo.git
+
+personal -git clone git@github.com-personal:timhilehin1/repo.git
+git whoami
+
+if we have a project out this repos. i can run git personal or git-company to set the account i want on this repo
+
+when using js operators like MAP, Map Oowns the loop, when you call MAP, we also call a callback function, MAP is responsible for running those callbacks and keeping the result in a final array version. so when we run return in callbacks, it only applies to the context of that callback. a return context is the nearest closing function.
+writing topics
+- Single threaded vs multi threaded
+- explaining callbacks
+shipping address, done too.. hmm
+ttok care of bugs
+prisma only helps generate the sql query, that's actually so smart, it's still sql behind the hood, that's so smart
+
